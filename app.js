@@ -33,18 +33,38 @@ const CH = [
   ["Rufus Humphrey", "rufus"],
   ["Dorota Kishlovsky", "dorota"],
 ];
-const H3 = 1.08e7,
+const H5 = 1.8e7,
+  INIT = 3,
+  GIFT_POOL = 20,
   MISS = 5,
   REJECT = 15,
   FORCE = /rain/.test(location.search),
   $ = (s) => document.querySelector(s);
+const due = (f) => {
+  let t = f,
+    r = H5;
+  for (let i = 0; i < 9; i++) {
+    const d = new Date(t),
+      a = new Date(d).setHours(8, 0, 0, 0),
+      e = new Date(d).setHours(23, 0, 0, 0);
+    if (t < a) t = a;
+    if (t >= e) {
+      t = a + 864e5;
+      continue;
+    }
+    if (r <= e - t) return t + r;
+    r -= e - t;
+    t = a + 864e5;
+  }
+  return t;
+};
 const day = () => new Date().toLocaleDateString("en-CA"),
   yday = () => new Date(Date.now() - 864e5).toLocaleDateString("en-CA");
 const mins = () => {
     const d = new Date();
     return d.getHours() * 60 + d.getMinutes();
   },
-  inRain = () => FORCE || (mins() >= 927 && mins() < 940);
+  inRain = () => FORCE || (mins() >= 1320 && mins() < 1335);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt()};`),
   name = (id) => (CH.find((c) => c[1] == id) || ["Someone"])[0];
 const av = (id, dead) =>
@@ -117,12 +137,16 @@ const gg = (t) => {
   e.textContent = "💋 " + t;
   e.className = "show";
   clearTimeout(gg.t);
-  gg.t = setTimeout(() => (e.className = ""), 5500);
+  gg.t = setTimeout(
+    () => (e.className = ""),
+    Math.min(6000, 1800 + t.length * 40),
+  );
 };
 const snark = () => gg(SN[(Math.random() * SN.length) | 0]);
 const modal = (h) => {
   const m = $("#modal");
   m.hidden = !h;
+  document.body.classList.toggle("lock", !!h || rainOn == 1);
   m.innerHTML = h
     ? `<div class=card>${h}<p><button data-x>Close</button></p></div>`
     : "";
@@ -139,6 +163,10 @@ const modal = (h) => {
   rs();
   onresize = rs;
   (function f() {
+    if (document.body.classList.contains("lock")) {
+      requestAnimationFrame(f);
+      return;
+    }
     x.fillStyle = "rgba(5,2,3,.16)";
     x.fillRect(0, 0, cv.width, cv.height);
     if (Math.random() < 0.12)
@@ -173,7 +201,13 @@ let uid,
   stopRain,
   rainTimer,
   hackList = [],
-  rs;
+  jarList = [],
+  rs,
+  rq = [],
+  rI = -1,
+  rainDone = 0,
+  rD,
+  T0 = Date.now();
 const post = (t) =>
   addDoc(collection(db, "meta"), { f: 1, text: t, t: Date.now() }).catch(
     () => {},
@@ -209,6 +243,9 @@ signInAnonymously(getAuth())
   .catch((e) => gg("Firebase: " + e.message));
 
 async function load() {
+  await capAward();
+  const c = await getDoc(doc(db, "meta", "cap"));
+  capUid = c.exists() ? c.data().uid : null;
   const u = await getDoc(doc(db, "users", uid));
   if (!u.exists()) return pick();
   me = u.data();
@@ -216,11 +253,8 @@ async function load() {
   pts = p.pts;
   last = p.last;
   await penalty();
-  await capAward();
-  const c = await getDoc(doc(db, "meta", "cap"));
-  capUid = c.exists() ? c.data().uid : null;
   await resolve(yday());
-  if (mins() >= 1335) await resolve(day());
+  await resolve(day());
   roster = (await getDocs(collection(db, "users"))).docs.map((d) => ({
     id: d.id,
     ...d.data(),
@@ -237,11 +271,19 @@ async function pick() {
     `<h2>Who are you tonight?</h2><div class=chars>${CH.map(([n, id]) => `<button class=pc data-id=${id} ${taken.has(id) ? "disabled" : ""}>${av(id)}<span>${n}</span></button>`).join("")}</div>`;
 }
 async function penalty() {
-  if (me.n < 10 || me.banned) return;
-  const m = Math.floor((Date.now() - last) / H3);
+  if (me.n < INIT || me.banned) return;
+  let m = 0;
+  while (m < 30 && due(last) <= Date.now()) {
+    last = due(last);
+    m++;
+  }
   if (m < 1) return;
+  if (capUid == uid) {
+    last = Date.now();
+    await updateDoc(doc(db, "priv", uid), { last });
+    return;
+  }
   pts -= MISS * m;
-  last += m * H3;
   await updateDoc(doc(db, "priv", uid), { pts, last });
   sfx.sting();
   gg(
@@ -262,21 +304,21 @@ async function render() {
     $("#app").innerHTML = "";
     return;
   }
-  const onb = me.n < 10,
+  const onb = me.n < INIT,
     own = capUid == uid,
     left = 2 - (me.rv?.d == day() ? me.rv.n : 0);
   if (onb) tab = "home";
   const head = `<div class=ticker><span>📰 ${feed[0] ? esc(feed[0].text) : "Spotted: nothing yet. Give me something."}</span></div>`;
   const power = own
-    ? `<div class=power>${CAP(90)}<div><h3>Georgina's Cap</h3><p>You hold the power. ${left} hack${left == 1 ? "" : "s"} left today.</p><button id=hk>Hack a secret</button></div></div>`
+    ? `<div class=power>${CAP(90)}<div><h3>Georgina's Cap</h3><p>You hold the power. ${left} hack${left == 1 ? "" : "s"} left today.</p><p>Gift pool: <b>${me.gp || 0}</b> points</p><button id=hk>Hack a secret</button> <button id=gf>Gift points</button></div></div>`
     : "";
   let h = "";
   if (tab == "home")
     h = `<section class=card><div class=row>${av(me.ch)}<div><h2>${name(me.ch)}</h2><p>Loyalty <b class=pts>${pts}</b> <small>only you can see this</small></p></div></div>${power}</section>
-  <section class=card><h3>${onb ? `Initiation: secret ${me.n + 1} of 10` : "Spill, sweetie"}</h3>
+  <section class=card><h3>${onb ? `Initiation: secret ${me.n + 1} of ${INIT}` : "Spill, sweetie"}</h3>
   <textarea id=tx maxlength=240 placeholder="A secret. A scandal. Someone else's mess."></textarea>
   <select id=ab><option value="">About: myself, or no one in particular</option>${CH.map(([n, id]) => `<option value=${id}>About ${n}</option>`).join("")}</select>
-  <button id=send>Whisper to Gossip Girl</button>${onb ? "" : "<p>Next secret due in <b id=cd></b></p>"}</section>`;
+  <button id=send>Whisper to Gossip Girl</button>${onb ? "" : own ? "<p>🧢 No timer for you while you hold the cap.</p>" : "<p>Next secret due in <b id=cd></b> <small>(counts 8 AM to 11 PM only)</small></p>"}</section>`;
   if (tab == "blog") {
     feed = await getFeed();
     h = `<section class="card feed"><h3>Gossip Girl's blog</h3>${feed.map((f) => `<p>${esc(f.text)}<small>${new Date(f.t).toLocaleString()}</small></p>`).join("") || "<p>Nothing yet.</p>"}</section>`;
@@ -293,6 +335,15 @@ async function render() {
     h = `<section class=card><h3>${esc(mini.name)}</h3><p>A new game every day. Highest score before midnight steals the cap.</p><button id=pl>Play today's game</button></section>${power}
     <section class=card><h3>Today's scores</h3>${sc.map((s) => `<div class=lb><span>${nm(s.uid)}</span><b>${s.s}</b></div>`).join("") || "<p>No one has played yet.</p>"}</section>`;
   }
+  if (tab == "jar") {
+    const js = (
+      await getDocs(query(collection(db, "secrets"), where("rev", "==", true)))
+    ).docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => b.t - a.t);
+    jarList = js;
+    h = `<section class=card><h3>🫙 The jar</h3><p>Every secret I have revealed. Tap a chit to read it.</p><div class=jar>${js.map((s) => `<button class=slip data-j=${s.id}>${esc(s.text.slice(0, 48))}…<small>${s.verdict || ""}</small></button>`).join("") || "<p>The jar is empty.</p>"}</div></section>`;
+  }
   if (tab == "crew")
     h = `<div class=crew>${roster.map((u) => `<section class=card>${av(u.ch, u.banned)}<b>${name(u.ch)}</b><p>${u.id == capUid ? CAP(32) + " Holds the cap" : u.banned ? "⚰️ In the coffin" : "Still in the game"}</p></section>`).join("")}</div>`;
   $("#app").innerHTML =
@@ -303,6 +354,7 @@ async function render() {
       : `<nav class=tabs>${[
           ["home", "Whisper"],
           ["blog", "Blog"],
+          ["jar", "Jar"],
           ["game", "Game"],
           ["crew", "Crew"],
         ]
@@ -317,21 +369,26 @@ function tick() {
   if (!me || me.banned) return;
   const cd = $("#cd");
   if (cd) {
-    const s = Math.max(0, Math.ceil((last + H3 - Date.now()) / 1e3));
-    cd.textContent = [(s / 3600) | 0, ((s / 60) | 0) % 60, s % 60]
-      .map((v) => String(v).padStart(2, 0))
-      .join(":");
+    const s = Math.max(0, Math.ceil((due(last) - Date.now()) / 1e3));
+    cd.textContent =
+      (new Date().getHours() < 8 || new Date().getHours() >= 23
+        ? "⏸ night, back at 8 AM · "
+        : "") +
+      [(s / 3600) | 0, ((s / 60) | 0) % 60, s % 60]
+        .map((v) => String(v).padStart(2, 0))
+        .join(":");
     cd.classList.toggle("late", s < 900);
   }
-  if (me.n >= 10 && !busy && Date.now() >= last + H3) {
+  if (me.n >= INIT && !busy && Date.now() >= due(last)) {
     busy = 1;
     penalty().then(() => {
       busy = 0;
       render();
     });
   }
-  if (inRain() && !rainOn) startRain();
-  if (!inRain() && rainOn) endRain();
+  if (mins() < 1320) rainDone = 0;
+  if (!rainOn && !rainDone && (FORCE || mins() >= 1320)) startRain();
+  if (rainOn) step();
 }
 async function send() {
   const t = $("#tx").value.trim();
@@ -347,12 +404,12 @@ async function send() {
   await updateDoc(doc(db, "users", uid), { n: me.n });
   await updateDoc(doc(db, "priv", uid), { last });
   sfx.drip();
-  if (me.n == 10) {
+  if (me.n == INIT) {
     gg("Initiation done. Now I own all of you. xoxo");
-    post(`${name(me.ch)} finished initiation. I now own ten of their secrets.`);
+    post(`${name(me.ch)} finished initiation. I now own their first secrets.`);
   } else {
     snark();
-    if (me.n > 10)
+    if (me.n > INIT)
       post(
         "A fresh whisper just landed in my inbox. Someone is feeling brave.",
       );
@@ -360,77 +417,129 @@ async function send() {
   render();
 }
 
-// ---- chit rain: a real shower of readable chits, all carrying the same secret ----
+// ---- chit rain: every secret of the day, one minute each, blood wipe between ----
+const rstart = (d) => (FORCE ? T0 : new Date(d + "T22:00:00").getTime()),
+  STEP = FORCE ? 15e3 : 6e4;
+const blood = () => {
+  sfx.sting();
+  const b = document.createElement("div");
+  b.id = "blood";
+  document.body.append(b);
+  setTimeout(() => b.remove(), 2400);
+};
 async function startRain() {
   rainOn = 1;
-  const d = day(),
-    rd = doc(db, "rain", d);
-  let r = await getDoc(rd);
+  const d = FORCE ? day() + "-t" : day(),
+    rdoc = doc(db, "rain", d);
+  rD = d;
+  let r = await getDoc(rdoc);
   if (!r.exists()) {
-    const all = (await getDocs(collection(db, "secrets"))).docs
-      .map((x) => x.id)
-      .sort();
-    if (!all.length) return (rainOn = 0);
-    await setDoc(rd, {
-      sid: all[
-        ([...d].reduce((a, c) => (a * 31 + c.charCodeAt()) | 0, 7) >>> 0) %
-          all.length
-      ],
-      done: false,
-    });
-    r = await getDoc(rd);
+    const to = rstart(day()),
+      all = (await getDocs(collection(db, "secrets"))).docs
+        .map((x) => ({ id: x.id, ...x.data() }))
+        .filter((x) => FORCE || (x.t >= to - 864e5 && x.t < to))
+        .sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1))
+        .slice(0, 100);
+    if (!all.length) {
+      rainOn = 0;
+      rainDone = 1;
+      return;
+    }
+    await setDoc(rdoc, { ids: all.map((x) => x.id), done: false });
+    r = await getDoc(rdoc);
   }
-  rs = (await getDoc(doc(db, "secrets", r.data().sid))).data();
-  const t = esc(rs.text);
-  const voted = (await getDoc(doc(db, "rain", d, "votes", uid))).exists(),
-    eligible = rs.by != uid && rs.about != me.ch;
+  rq = await Promise.all(
+    r
+      .data()
+      .ids.map(async (id) => ({
+        id,
+        ...(await getDoc(doc(db, "secrets", id))).data(),
+      })),
+  );
+  if (!FORCE && Date.now() >= rstart(d) + rq.length * STEP) {
+    rainOn = 0;
+    rainDone = 1;
+    return resolve(d);
+  }
+  rI = -1;
   $("#rain").hidden = false;
-  sfx.thunder();
+  document.body.classList.add("lock");
   stopRain = rainSnd();
   rainTimer = setInterval(
     () => snd(800 + Math.random() * 900, "sine", 0.04, 0.03),
     220,
   );
+}
+function step() {
+  if (!rq.length) return;
+  const i = Math.floor((Date.now() - rstart(rD)) / STEP);
+  if (!FORCE && i >= rq.length) return endRain();
+  const k = FORCE ? i % rq.length : i;
+  if (k == rI || k < 0) return;
+  if (rI >= 0) {
+    blood();
+    rI = k;
+    setTimeout(() => show(k), 1000);
+  } else {
+    rI = k;
+    show(k);
+  }
+}
+async function show(k) {
+  const s = rq[k],
+    voted = (
+      await getDoc(doc(db, "rain", rD, "votes", s.id + "_" + uid))
+    ).exists(),
+    ok = s.by != uid && s.about != me.ch,
+    t = esc(s.text);
   $("#rain").innerHTML =
-    Array.from(
-      { length: 26 },
-      () =>
-        `<i class=chit style="--x:${Math.random() * 88}%;--d:${7 + Math.random() * 6}s;--s:-${Math.random() * 13}s;--r:${(Math.random() * 40 - 20) | 0}deg"><span><b>SPOTTED</b>${t}</span></i>`,
-    ).join("") +
-    `<div class=card id=rc><h2>Chit rain</h2><p>${rs.about ? "A secret about " + name(rs.about) : "A secret from someone close"}. Tap any chit to read it up close.</p>${voted ? "<p>Vote locked. Nobody will know which way you voted.</p>" : eligible ? "<button data-v=real>Genuine</button> <button data-v=fake>Fake</button>" : `<p>${rs.by == uid ? "This one is yours" : "This one is about you"}. You don't get a vote. Pray.</p>`}</div>`;
+    `<div class=field>${Array.from({ length: 22 }, () => `<i class=chit style="--x:${Math.random() * 85}%;--d:${6 + Math.random() * 5}s;--s:-${Math.random() * 11}s;--r:${(Math.random() * 40 - 20) | 0}deg;--h:${innerHeight}"><span><b>SPOTTED</b>${t}</span></i>`).join("")}</div>
+  <div class=card id=rc><h2>Secret ${k + 1} of ${rq.length}</h2><p>${s.about ? "About " + name(s.about) : "From someone close"}. Tap a chit to read it up close.</p>${voted ? "<p>Vote locked. Nobody will know which way you voted.</p>" : ok ? "<button data-v=real>Genuine</button> <button data-v=fake>Fake</button>" : `<p>${s.by == uid ? "This one is yours" : "This one is about you"}. You get no vote. Pray.</p>`}</div>`;
+  sfx.thunder();
 }
 function endRain() {
   rainOn = 0;
+  rainDone = 1;
   clearInterval(rainTimer);
   stopRain?.();
   $("#rain").hidden = true;
-  resolve(day());
+  document.body.classList.remove("lock");
+  blood();
+  resolve(rD);
 }
 async function resolve(d) {
-  // rejected only if EVERY eligible voter (not the author, not the subject) says fake
+  // a secret is rejected only if EVERY eligible voter (not author, not subject) said fake
   const rd = doc(db, "rain", d),
     r = await getDoc(rd);
   if (!r.exists() || r.data().done) return;
+  const ids = r.data().ids;
+  if (!ids || Date.now() < rstart(d) + ids.length * STEP) return;
   await updateDoc(rd, { done: true });
-  const s = (await getDoc(doc(db, "secrets", r.data().sid))).data(),
-    fakes = new Set(
-      (await getDocs(collection(db, "rain", d, "votes"))).docs
-        .filter((x) => x.data().v == "fake")
-        .map((x) => x.id),
+  const vs = (await getDocs(collection(db, "rain", d, "votes"))).docs,
+    us = (await getDocs(collection(db, "users"))).docs.filter(
+      (x) => !x.data().banned,
     );
-  const el = (await getDocs(collection(db, "users"))).docs.filter(
-      (x) => !x.data().banned && x.id != s.by && x.data().ch != s.about,
-    ),
-    bad = el.length > 0 && el.every((x) => fakes.has(x.id));
-  if (bad) await updateDoc(doc(db, "priv", s.by), { pts: increment(-REJECT) });
-  await updateDoc(rd, { verdict: bad ? "rejected" : "genuine" });
-  const m = bad
-    ? "Last night's secret was declared fake. The liar paid for it."
-    : "Last night's secret was real. Someone should be nervous.";
+  let bad = 0;
+  for (const id of ids) {
+    const ref = doc(db, "secrets", id),
+      s = (await getDoc(ref)).data(),
+      fk = new Set(
+        vs
+          .filter((x) => x.id.startsWith(id + "_") && x.data().v == "fake")
+          .map((x) => x.id.slice(id.length + 1)),
+      );
+    const el = us.filter((x) => x.id != s.by && x.data().ch != s.about),
+      rej = el.length > 0 && el.every((x) => fk.has(x.id));
+    if (rej) {
+      bad++;
+      await updateDoc(doc(db, "priv", s.by), { pts: increment(-REJECT) });
+    }
+    await updateDoc(ref, { rev: true, verdict: rej ? "rejected" : "genuine" });
+  }
+  const m = `Tonight's rain revealed ${ids.length} secret${ids.length > 1 ? "s" : ""}. ${bad ? bad + " declared fake, and the liars paid." : "Every one was real."} Find them in the jar.`;
   gg(m);
   post(m);
 }
-
 async function capAward() {
   const y = yday(),
     cd = doc(db, "meta", "cap"),
@@ -443,6 +552,10 @@ async function capAward() {
     .sort((a, b) => b.s - a.s);
   if (sc[0]) {
     await setDoc(cd, { uid: sc[0].uid, for: y });
+    if (!c.exists() || c.data().uid != sc[0].uid)
+      await updateDoc(doc(db, "users", sc[0].uid), { gp: GIFT_POOL }).catch(
+        () => {},
+      );
     post("A new head wears Georgina's cap today. Watch your backs.");
   }
 }
@@ -468,6 +581,33 @@ async function reveal(id) {
   modal("");
   gg(`${name(u.data().ch)} said: "${s.text}"`);
   post("Someone just used Georgina's cap to peek behind the curtain.");
+  render();
+}
+function giftUI() {
+  if (!(me.gp > 0)) return gg("Your gift pool is empty.");
+  modal(
+    `<h3>${CAP(28)} Gift points</h3><p>Pool left: <b>${me.gp}</b></p><select id=gt>${roster
+      .filter((u) => u.id != uid && !u.banned)
+      .map((u) => `<option value=${u.id}>${name(u.ch)}</option>`)
+      .join(
+        "",
+      )}</select><input id=ga type=number inputmode=numeric min=1 max=${me.gp} placeholder="How many points?"><button data-g>Gift</button>`,
+  );
+}
+async function gift() {
+  const n = Math.floor(+$("#ga").value),
+    to = $("#gt").value;
+  if (!to || !(n >= 1) || n > me.gp)
+    return gg("Pick someone and a valid amount.");
+  me.gp -= n;
+  await updateDoc(doc(db, "users", uid), { gp: me.gp });
+  await updateDoc(doc(db, "priv", to), { pts: increment(n) });
+  sfx.drip();
+  modal("");
+  gg(`Gifted. ${me.gp} left in your pool.`);
+  post(
+    `The cap master just gifted loyalty to ${name(roster.find((u) => u.id == to).ch)}.`,
+  );
   render();
 }
 async function play() {
@@ -507,24 +647,34 @@ $("#app").onclick = async (e) => {
   if (!b) return;
   if (b.dataset.t) {
     tab = b.dataset.t;
+    scrollTo(0, 0);
     return render();
   }
   if (b.id == "send") send();
   if (b.id == "pl") play();
   if (b.id == "hk") hack();
+  if (b.id == "gf") giftUI();
+  if (b.dataset.j) {
+    const j = jarList.find((x) => x.id == b.dataset.j);
+    modal(
+      `<h3>${j.about ? "About " + name(j.about) : "A whisper"}</h3><blockquote>${esc(j.text)}</blockquote><p>Verdict: ${j.verdict}</p>`,
+    );
+  }
 };
 $("#modal").onclick = (e) => {
   const b = e.target.closest("button");
   if (!b) return;
   if ("x" in b.dataset) modal("");
   if (b.dataset.h) reveal(b.dataset.h);
+  if ("g" in b.dataset) gift();
 };
 $("#rain").onclick = async (e) => {
   const c = e.target.closest(".chit");
   if (c) return c.classList.toggle("big");
-  const v = e.target.dataset.v;
-  if (!v || rs.by == uid || rs.about == me.ch) return;
-  await setDoc(doc(db, "rain", day(), "votes", uid), { v });
+  const v = e.target.dataset.v,
+    s = rq[rI];
+  if (!v || !s || s.by == uid || s.about == me.ch) return;
+  await setDoc(doc(db, "rain", rD, "votes", s.id + "_" + uid), { v });
   sfx.drip();
   e.target.parentElement.innerHTML =
     "<h2>Vote locked</h2><p>Nobody will know which way you voted.</p>";
