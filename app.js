@@ -44,7 +44,7 @@ const mins = () => {
     const d = new Date();
     return d.getHours() * 60 + d.getMinutes();
   },
-  inRain = () => FORCE || (mins() >= 1320 && mins() < 1335);
+  inRain = () => FORCE || (mins() >= 927 && mins() < 940);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt()};`),
   name = (id) => (CH.find((c) => c[1] == id) || ["Someone"])[0];
 const av = (id, dead) =>
