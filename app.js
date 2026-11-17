@@ -15,6 +15,7 @@ import {
   query,
   where,
   increment,
+  runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { cfg } from "./firebase-config.js";
 import mini from "./minigame.js";
@@ -35,9 +36,12 @@ const CH = [
 ];
 const H5 = 1.8e7,
   INIT = 3,
-  GIFT_POOL = 20,
+  GIFT_POOL = 12,
+  CAP_BONUS = 8,
+  NOVOTE = 3,
+  GRACE = 12e4,
   MISS = 5,
-  REJECT = 15,
+  REJECT = 10,
   FORCE = /rain/.test(location.search),
   $ = (s) => document.querySelector(s);
 const due = (f) => {
@@ -207,7 +211,12 @@ let uid,
   rI = -1,
   rainDone = 0,
   rD,
-  T0 = Date.now();
+  T0 = Date.now(),
+  hk = {},
+  need = false,
+  pend = 0,
+  gameStart,
+  tc = 0;
 const post = (t) =>
   addDoc(collection(db, "meta"), { f: 1, text: t, t: Date.now() }).catch(
     () => {},
@@ -252,6 +261,7 @@ async function load() {
   const p = (await getDoc(doc(db, "priv", uid))).data();
   pts = p.pts;
   last = p.last;
+  hk = p.hk || {};
   await penalty();
   await resolve(yday());
   await resolve(day());
@@ -341,8 +351,14 @@ async function render() {
     ).docs
       .map((d) => ({ id: d.id, ...d.data() }))
       .sort((a, b) => b.t - a.t);
+    for (const id of Object.keys(hk))
+      if (!js.some((x) => x.id == id)) {
+        const g = await getDoc(doc(db, "secrets", id));
+        if (g.exists()) js.push({ id, ...g.data() });
+      }
+    js.sort((a, b) => b.t - a.t);
     jarList = js;
-    h = `<section class=card><h3>🫙 The jar</h3><p>Every secret I have revealed. Tap a chit to read it.</p><div class=jar>${js.map((s) => `<button class=slip data-j=${s.id}>${esc(s.text.slice(0, 48))}…<small>${s.verdict || ""}</small></button>`).join("") || "<p>The jar is empty.</p>"}</div></section>`;
+    h = `<section class=card><h3>🫙 The jar</h3><p>Every secret I have revealed. Tap a chit to read it.</p><div class=jar>${js.map((s) => `<button class=slip data-j=${s.id}>${esc(s.text.slice(0, 48))}…<small>${s.verdict || "not revealed yet"}${hk[s.id] ? " · 🧢 " + name(hk[s.id]) : ""}</small></button>`).join("") || "<p>The jar is empty.</p>"}</div></section>`;
   }
   if (tab == "crew")
     h = `<div class=crew>${roster.map((u) => `<section class=card>${av(u.ch, u.banned)}<b>${name(u.ch)}</b><p>${u.id == capUid ? CAP(32) + " Holds the cap" : u.banned ? "⚰️ In the coffin" : "Still in the game"}</p></section>`).join("")}</div>`;
@@ -367,6 +383,10 @@ async function render() {
 
 function tick() {
   if (!me || me.banned) return;
+  if (++tc % 20 == 0) {
+    sync();
+    if (!rainOn && mins() >= 1320) resolve(day());
+  }
   const cd = $("#cd");
   if (cd) {
     const s = Math.max(0, Math.ceil((due(last) - Date.now()) / 1e3));
@@ -435,11 +455,10 @@ async function startRain() {
   let r = await getDoc(rdoc);
   if (!r.exists()) {
     const to = rstart(day()),
-      all = (await getDocs(collection(db, "secrets"))).docs
+      raw = (await getDocs(collection(db, "secrets"))).docs
         .map((x) => ({ id: x.id, ...x.data() }))
-        .filter((x) => FORCE || (x.t >= to - 864e5 && x.t < to))
-        .sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1))
-        .slice(0, 100);
+        .filter((x) => FORCE || (x.t >= to - 864e5 && x.t < to));
+    const all = byPlayer(raw).slice(0, 100);
     if (!all.length) {
       rainOn = 0;
       rainDone = 1;
@@ -449,12 +468,10 @@ async function startRain() {
     r = await getDoc(rdoc);
   }
   rq = await Promise.all(
-    r
-      .data()
-      .ids.map(async (id) => ({
-        id,
-        ...(await getDoc(doc(db, "secrets", id))).data(),
-      })),
+    r.data().ids.map(async (id) => ({
+      id,
+      ...(await getDoc(doc(db, "secrets", id))).data(),
+    })),
   );
   if (!FORCE && Date.now() >= rstart(d) + rq.length * STEP) {
     rainOn = 0;
@@ -462,6 +479,8 @@ async function startRain() {
     return resolve(d);
   }
   rI = -1;
+  need = false;
+  pend = 0;
   $("#rain").hidden = false;
   document.body.classList.add("lock");
   stopRain = rainSnd();
@@ -470,19 +489,65 @@ async function startRain() {
     220,
   );
 }
+const sr = (s) => () => (s = (s * 16807) % 2147483647) / 2147483647;
+const byPlayer = (a) => {
+  const r = sr(seed());
+  return a
+    .sort((x, y) => x.t - y.t || (x.id < y.id ? -1 : 1))
+    .map((s) => [r(), s])
+    .sort((x, y) => x[0] - y[0])
+    .map((x) => x[1]);
+};
 function step() {
-  if (!rq.length) return;
+  // voting is compulsory: the next secret only comes after you vote on this one
+  if (!rq.length || pend) return;
   const i = Math.floor((Date.now() - rstart(rD)) / STEP);
-  if (!FORCE && i >= rq.length) return endRain();
-  const k = FORCE ? i % rq.length : i;
-  if (k == rI || k < 0) return;
-  if (rI >= 0) {
-    blood();
-    rI = k;
-    setTimeout(() => show(k), 1000);
-  } else {
-    rI = k;
-    show(k);
+  if (FORCE) {
+    const k = i % rq.length;
+    if (k != rI) {
+      rI = k;
+      show(k);
+    }
+    return;
+  }
+  if (need) {
+    $("#rc")?.classList.add("alarm");
+    snd(760, "square", 0.12, 0.07);
+    navigator.vibrate?.(150);
+    return;
+  }
+  if (i >= rq.length && rI == rq.length - 1) return endRain();
+  if (rI < Math.min(i, rq.length - 1)) {
+    const k = rI + 1;
+    pend = 1;
+    if (rI >= 0) {
+      rI = k;
+      blood();
+      setTimeout(async () => {
+        await show(k);
+        pend = 0;
+      }, 1000);
+    } else {
+      rI = 0;
+      show(0).then(() => (pend = 0));
+    }
+  }
+}
+async function sync() {
+  const p = (await getDoc(doc(db, "priv", uid))).data();
+  if (!p) return;
+  const d = p.pts - pts;
+  pts = p.pts;
+  hk = p.hk || {};
+  if (pts <= 0 && !me.banned) {
+    me.banned = true;
+    await updateDoc(doc(db, "users", uid), { banned: true });
+    post(`${name(me.ch)} has been banished. Into the coffin they go.`);
+    return render();
+  }
+  if (d) {
+    gg(`Your loyalty changed by ${d > 0 ? "+" : ""}${d}.`);
+    if (!rainOn && $("#modal").hidden) render();
   }
 }
 async function show(k) {
@@ -492,9 +557,10 @@ async function show(k) {
     ).exists(),
     ok = s.by != uid && s.about != me.ch,
     t = esc(s.text);
+  need = ok && !voted;
   $("#rain").innerHTML =
     `<div class=field>${Array.from({ length: 22 }, () => `<i class=chit style="--x:${Math.random() * 85}%;--d:${6 + Math.random() * 5}s;--s:-${Math.random() * 11}s;--r:${(Math.random() * 40 - 20) | 0}deg;--h:${innerHeight}"><span><b>SPOTTED</b>${t}</span></i>`).join("")}</div>
-  <div class=card id=rc><h2>Secret ${k + 1} of ${rq.length}</h2><p>${s.about ? "About " + name(s.about) : "From someone close"}. Tap a chit to read it up close.</p>${voted ? "<p>Vote locked. Nobody will know which way you voted.</p>" : ok ? "<button data-v=real>Genuine</button> <button data-v=fake>Fake</button>" : `<p>${s.by == uid ? "This one is yours" : "This one is about you"}. You get no vote. Pray.</p>`}</div>`;
+  <div class=card id=rc><h2>Secret ${k + 1} of ${rq.length}</h2><p>${s.about ? "About " + name(s.about) : "From someone close"}. Tap a chit to read it up close.</p>${voted ? "<p>Vote locked. Nobody will know which way you voted.</p>" : ok ? "<div class=vote><button class=real data-v=real>✔ Genuine</button><button class=fake data-v=fake>✖ Fake</button></div><p class=must>You must vote to continue.</p>" : `<p>${s.by == uid ? "This one is yours" : "This one is about you"}. You get no vote. Pray.</p>`}</div>`;
   sfx.thunder();
 }
 function endRain() {
@@ -513,7 +579,7 @@ async function resolve(d) {
     r = await getDoc(rd);
   if (!r.exists() || r.data().done) return;
   const ids = r.data().ids;
-  if (!ids || Date.now() < rstart(d) + ids.length * STEP) return;
+  if (!ids || Date.now() < rstart(d) + ids.length * STEP + GRACE) return;
   await updateDoc(rd, { done: true });
   const vs = (await getDocs(collection(db, "rain", d, "votes"))).docs,
     us = (await getDocs(collection(db, "users"))).docs.filter(
@@ -530,6 +596,14 @@ async function resolve(d) {
       );
     const el = us.filter((x) => x.id != s.by && x.data().ch != s.about),
       rej = el.length > 0 && el.every((x) => fk.has(x.id));
+    const vt = new Set(
+      vs
+        .filter((x) => x.id.startsWith(id + "_"))
+        .map((x) => x.id.slice(id.length + 1)),
+    );
+    for (const x of el)
+      if (!vt.has(x.id))
+        await updateDoc(doc(db, "priv", x.id), { pts: increment(-NOVOTE) });
     if (rej) {
       bad++;
       await updateDoc(doc(db, "priv", s.by), { pts: increment(-REJECT) });
@@ -550,14 +624,25 @@ async function capAward() {
   ).docs
     .map((x) => x.data())
     .sort((a, b) => b.s - a.s);
-  if (sc[0]) {
-    await setDoc(cd, { uid: sc[0].uid, for: y });
-    if (!c.exists() || c.data().uid != sc[0].uid)
-      await updateDoc(doc(db, "users", sc[0].uid), { gp: GIFT_POOL }).catch(
-        () => {},
-      );
-    post("A new head wears Georgina's cap today. Watch your backs.");
+  if (!sc[0]) return;
+  const w = sc[0].uid,
+    fresh = !c.exists() || c.data().uid != w;
+  const ok = await runTransaction(db, async (t) => {
+    const g = await t.get(cd);
+    if (g.exists() && g.data().for >= y) return false;
+    t.set(cd, { uid: w, for: y });
+    return true;
+  });
+  if (!ok) return;
+  if (fresh) {
+    await updateDoc(doc(db, "users", w), { gp: GIFT_POOL });
+    await updateDoc(doc(db, "priv", w), { pts: increment(CAP_BONUS) });
   }
+  post(
+    fresh
+      ? "A new head wears Georgina's cap today. Watch your backs."
+      : "The cap stays on the same head. Of course it does.",
+  );
 }
 async function hack() {
   if (2 - (me.rv?.d == day() ? me.rv.n : 0) < 1)
@@ -567,7 +652,7 @@ async function hack() {
     .sort((a, b) => b.t - a.t)
     .slice(0, 12);
   modal(
-    `<h3>${CAP(28)} Hack</h3>${hackList.map((s) => `<p>${esc(s.text)} <button data-h=${s.id}>Reveal who</button></p>`).join("") || "<p>Nothing to steal yet.</p>"}`,
+    `<h3>${CAP(28)} Hack</h3>${hackList.map((s) => `<p>${esc(s.text)} ${hk[s.id] ? "<b>→ " + name(hk[s.id]) + "</b>" : `<button data-h=${s.id}>Reveal who</button>`}</p>`).join("") || "<p>Nothing to steal yet.</p>"}`,
   );
 }
 async function reveal(id) {
@@ -575,6 +660,8 @@ async function reveal(id) {
   if (used >= 2) return gg("Out of hacks today.");
   const s = hackList.find((x) => x.id == id),
     u = await getDoc(doc(db, "users", s.by));
+  hk[id] = u.data().ch;
+  await updateDoc(doc(db, "priv", uid), { ["hk." + id]: hk[id] });
   me.rv = { d: day(), n: used + 1 };
   await updateDoc(doc(db, "users", uid), { rv: me.rv });
   sfx.sting();
@@ -611,22 +698,28 @@ async function gift() {
   render();
 }
 async function play() {
-  const k = day() + "_" + uid;
-  if ((await getDoc(doc(db, "scores", k))).exists())
+  const TEST = /game=/.test(location.search),
+    k = day() + "_" + uid;
+  if (!TEST && (await getDoc(doc(db, "scores", k))).exists())
     return gg("One try a day, sweetie.");
-  modal(`<h3>${esc(mini.name)}</h3><div id=mg></div>`);
-  mini.mount(
-    $("#mg"),
-    async (s) => {
-      await setDoc(doc(db, "scores", k), { uid, day: day(), s });
-      sfx[s ? "drip" : "sting"]();
-      gg(`You scored ${s}. The cap is decided at midnight.`);
-      setTimeout(() => {
-        modal("");
-        render();
-      }, 2200);
-    },
-    ctx,
+  gameStart = () => {
+    modal(`<h3>${esc(mini.name)}</h3><div id=mg></div>`);
+    mini.mount(
+      $("#mg"),
+      async (s) => {
+        if (!TEST) await setDoc(doc(db, "scores", k), { uid, day: day(), s });
+        sfx[s ? "drip" : "sting"]();
+        gg(`You scored ${s}. The cap is decided at midnight.`);
+        setTimeout(() => {
+          modal("");
+          render();
+        }, 2200);
+      },
+      ctx,
+    );
+  };
+  modal(
+    `<h3>${esc(mini.name)}</h3><p>${esc(mini.rules || "")}</p><p>You get one scored try today.</p><button data-s>Start game</button>`,
   );
 }
 
@@ -657,7 +750,7 @@ $("#app").onclick = async (e) => {
   if (b.dataset.j) {
     const j = jarList.find((x) => x.id == b.dataset.j);
     modal(
-      `<h3>${j.about ? "About " + name(j.about) : "A whisper"}</h3><blockquote>${esc(j.text)}</blockquote><p>Verdict: ${j.verdict}</p>`,
+      `<h3>${j.about ? "About " + name(j.about) : "A whisper"}</h3><blockquote>${esc(j.text)}</blockquote><p>Verdict: ${j.verdict || "not revealed yet"}</p>${hk[j.id] ? "<p>🧢 Written by <b>" + name(hk[j.id]) + "</b> (only you can see this)</p>" : ""}`,
     );
   }
 };
@@ -667,6 +760,7 @@ $("#modal").onclick = (e) => {
   if ("x" in b.dataset) modal("");
   if (b.dataset.h) reveal(b.dataset.h);
   if ("g" in b.dataset) gift();
+  if ("s" in b.dataset) gameStart();
 };
 $("#rain").onclick = async (e) => {
   const c = e.target.closest(".chit");
@@ -676,6 +770,9 @@ $("#rain").onclick = async (e) => {
   if (!v || !s || s.by == uid || s.about == me.ch) return;
   await setDoc(doc(db, "rain", rD, "votes", s.id + "_" + uid), { v });
   sfx.drip();
-  e.target.parentElement.innerHTML =
-    "<h2>Vote locked</h2><p>Nobody will know which way you voted.</p>";
+  need = false;
+  $("#rc").classList.remove("alarm");
+  $("#rc").innerHTML =
+    "<h2>Vote locked</h2><p>Nobody will know which way you voted. Next secret coming up.</p>";
+  step();
 };

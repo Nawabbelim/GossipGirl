@@ -107,3 +107,17 @@ input{width:100%;margin:8px 0;padding:10px;font:inherit;color:var(--ink);backgro
 .bar{position:relative;height:26px;border:1px solid var(--blood);border-radius:6px;background:#0d0204;margin:14px 0}
 .zone{position:absolute;left:40%;width:20%;top:0;bottom:0;background:var(--blood)}
 .mk{position:absolute;top:-4px;bottom:-4px;width:6px;background:#fff;border-radius:3px;box-shadow:0 0 8px #fff}
+/* ---- v4: bigger touch targets, tighter phone layout, loud compulsory vote ---- */
+body{font-size:17px;padding-bottom:96px}
+button{min-height:46px}
+main{width:100%}
+.tabs{gap:4px;padding:8px 6px calc(8px + env(safe-area-inset-bottom))}
+.tabs button{min-height:58px;font-size:1rem;max-width:none}
+.vote{display:flex;gap:10px;margin:12px 0}
+.vote button{flex:1;min-height:76px;font-size:1.3rem;padding:1em .4em}
+.vote .real{background:linear-gradient(#2e8b57,#14502f);box-shadow:0 0 18px #2e8b5788}
+.must{color:#ff6b78;font-weight:700}
+#rc.alarm{animation:alarm .5s infinite alternate;border-color:#ff2a3d}
+@keyframes alarm{to{box-shadow:0 0 40px 8px #ff2a3d}}
+@media(max-width:600px){main{padding:4px}.card{padding:12px;margin:10px 0}.card::after{display:none}header{padding:8px 6px 0}h1{font-size:2.3rem}header small{display:none}.ticker{margin:6px 0}h2{font-size:1.3rem}}
+@media(min-width:900px){main{max-width:900px}}
