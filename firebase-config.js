@@ -7,19 +7,3 @@ export const cfg = {
   projectId: "gossipgirl-6a235",
   appId: "1:354408066440:web:ca20bb6af3a1ab8b5f1e3d",
 };
-/*
-//Put one square picture (about 300×300) per character in img/, with exactly these names:
-
-(blair.jpg,
-  serena.jpg,
-  chuck.jpg,
-  nate.jpg,
-  dan.jpg,
-  jenny.jpg,
-  georgina.jpg,
-  vanessa.jpg,
-  lily.jpg,
-  eric.jpg,
-  rufus.jpg,
-  dorota.jpg);
-*/
