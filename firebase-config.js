@@ -7,3 +7,5 @@ export const cfg = {
   projectId: "gossipgirl-6a235",
   appId: "1:354408066440:web:ca20bb6af3a1ab8b5f1e3d",
 };
+export const VAPID =
+  "BCcV5LE76yU1SWuuaFVaQGvD68eVTtCnk8F92MmTAEDKmBdlEEOIWETpWHWSnmQkicEqAkmefG5_UnJeieSgGjM";

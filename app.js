@@ -36,12 +36,13 @@ const CH = [
 ];
 const H5 = 1.8e7,
   INIT = 3,
+  RAIN_SPEED = 1,
   GIFT_POOL = 12,
   CAP_BONUS = 8,
   NOVOTE = 3,
   GRACE = 12e4,
   MISS = 5,
-  REJECT = 10,
+  REJECT = 15,
   FORCE = /rain/.test(location.search),
   $ = (s) => document.querySelector(s);
 const due = (f) => {
@@ -216,7 +217,9 @@ let uid,
   need = false,
   pend = 0,
   gameStart,
-  tc = 0;
+  tc = 0,
+  leadUid,
+  alarmed = 0;
 const post = (t) =>
   addDoc(collection(db, "meta"), { f: 1, text: t, t: Date.now() }).catch(
     () => {},
@@ -342,8 +345,11 @@ async function render() {
         .map((x) => x.data())
         .sort((a, b) => b.s - a.s),
       nm = (id) => name(roster.find((r) => r.id == id)?.ch);
+    leadUid = sc[0]?.uid;
+    const chd = await getDoc(cref()),
+      chBox = chHTML(chd.exists() ? chd.data() : null, nm, leadUid);
     h = `<section class=card><h3>${esc(mini.name)}</h3><p>A new game every day. Highest score before midnight steals the cap.</p><button id=pl>Play today's game</button></section>${power}
-    <section class=card><h3>Today's scores</h3>${sc.map((s) => `<div class=lb><span>${nm(s.uid)}</span><b>${s.s}</b></div>`).join("") || "<p>No one has played yet.</p>"}</section>`;
+    ${chBox}<section class=card><h3>Today's scores</h3>${sc.map((s) => `<div class=lb><span>${nm(s.uid)}</span><b>${s.s}</b></div>`).join("") || "<p>No one has played yet.</p>"}</section>`;
   }
   if (tab == "jar") {
     const js = (
@@ -387,6 +393,11 @@ function tick() {
     sync();
     if (!rainOn && mins() >= 1320) resolve(day());
   }
+  if (mins() == 1315 && !alarmed) {
+    alarmed = 1;
+    ring();
+  }
+  if (mins() < 1315) alarmed = 0;
   const cd = $("#cd");
   if (cd) {
     const s = Math.max(0, Math.ceil((due(last) - Date.now()) / 1e3));
@@ -468,10 +479,12 @@ async function startRain() {
     r = await getDoc(rdoc);
   }
   rq = await Promise.all(
-    r.data().ids.map(async (id) => ({
-      id,
-      ...(await getDoc(doc(db, "secrets", id))).data(),
-    })),
+    r
+      .data()
+      .ids.map(async (id) => ({
+        id,
+        ...(await getDoc(doc(db, "secrets", id))).data(),
+      })),
   );
   if (!FORCE && Date.now() >= rstart(d) + rq.length * STEP) {
     rainOn = 0;
@@ -559,7 +572,7 @@ async function show(k) {
     t = esc(s.text);
   need = ok && !voted;
   $("#rain").innerHTML =
-    `<div class=field>${Array.from({ length: 22 }, () => `<i class=chit style="--x:${Math.random() * 85}%;--d:${6 + Math.random() * 5}s;--s:-${Math.random() * 11}s;--r:${(Math.random() * 40 - 20) | 0}deg;--h:${innerHeight}"><span><b>SPOTTED</b>${t}</span></i>`).join("")}</div>
+    `<div class=field>${Array.from({ length: 22 }, () => `<i class=chit style="--x:${Math.random() * 85}%;--d:${(6 + Math.random() * 5) / RAIN_SPEED}s;--s:-${Math.random() * 11}s;--r:${(Math.random() * 16 - 8) | 0}deg;--h:${innerHeight}"><span><b>SPOTTED</b>${t}</span></i>`).join("")}</div>
   <div class=card id=rc><h2>Secret ${k + 1} of ${rq.length}</h2><p>${s.about ? "About " + name(s.about) : "From someone close"}. Tap a chit to read it up close.</p>${voted ? "<p>Vote locked. Nobody will know which way you voted.</p>" : ok ? "<div class=vote><button class=real data-v=real>✔ Genuine</button><button class=fake data-v=fake>✖ Fake</button></div><p class=must>You must vote to continue.</p>" : `<p>${s.by == uid ? "This one is yours" : "This one is about you"}. You get no vote. Pray.</p>`}</div>`;
   sfx.thunder();
 }
@@ -625,7 +638,8 @@ async function capAward() {
     .map((x) => x.data())
     .sort((a, b) => b.s - a.s);
   if (!sc[0]) return;
-  const w = sc[0].uid,
+  const chd = await getDoc(doc(db, "meta", "ch_" + y)),
+    w = chd.exists() && chd.data().st == "done" ? chd.data().win : sc[0].uid,
     fresh = !c.exists() || c.data().uid != w;
   const ok = await runTransaction(db, async (t) => {
     const g = await t.get(cd);
@@ -668,6 +682,83 @@ async function reveal(id) {
   modal("");
   gg(`${name(u.data().ch)} said: "${s.text}"`);
   post("Someone just used Georgina's cap to peek behind the curtain.");
+  render();
+}
+const ring = () => {
+  gg("🚨 Chit rain in 5 minutes. Voting is compulsory.");
+  for (let i = 0; i < 8; i++)
+    setTimeout(() => {
+      snd(880, "square", 0.28, 0.14);
+      setTimeout(() => snd(660, "square", 0.28, 0.14), 300);
+    }, i * 700);
+};
+// ---- cap challenge: one per day, the leader can be challenged to any custom game ----
+const cref = () => doc(db, "meta", "ch_" + day());
+const chHTML = (C, nm, lead) => {
+  const L = lead
+    ? `<p>👑 Tomorrow's cap master if nothing changes: <b>${nm(lead)}</b></p>`
+    : "";
+  if (!C)
+    return `<section class=card><h3>⚔️ Challenge</h3>${L}${lead && lead != uid ? `<textarea id=cg maxlength=120 placeholder="Pick your own game: arm wrestling, thumb war, chess, anything"></textarea><button id=cc>Challenge ${nm(lead)}</button>` : "<p>One challenge per day. Nobody has challenged yet.</p>"}</section>`;
+  const mine = uid == C.from || uid == C.to,
+    o = uid == C.from ? C.to : C.from;
+  let b = `<p><b>${nm(C.from)}</b> challenged <b>${nm(C.to)}</b>: <i>${esc(C.game)}</i></p>`;
+  if (C.st == "pending")
+    b +=
+      uid == C.to
+        ? "<button data-ca=on>Accept</button> <button data-ca=no>Decline</button>"
+        : "<p>Waiting for an answer…</p>";
+  if (C.st == "no") b += "<p>Declined. The leader keeps the spot.</p>";
+  if (C.st == "on")
+    b += mine
+      ? `<p>Play it for real, then both of you say who won.</p><button data-w=${C.from}>${nm(C.from)} won</button> <button data-w=${C.to}>${nm(C.to)} won</button><p>${C.v?.[uid] ? "Your pick is in. Waiting for " + nm(o) + "." : ""}</p>`
+      : "<p>Challenge in progress…</p>";
+  if (C.st == "done")
+    b += `<p>🏆 ${nm(C.win)} wins and takes tomorrow's cap.</p>`;
+  return `<section class=card><h3>⚔️ Challenge</h3>${L}${b}</section>`;
+};
+async function challenge() {
+  const g = $("#cg").value.trim();
+  if (g.length < 3) return gg("Describe the game first.");
+  if ((await getDoc(cref())).exists())
+    return gg("Someone already challenged today.");
+  await setDoc(cref(), {
+    day: day(),
+    from: uid,
+    to: leadUid,
+    game: g,
+    st: "pending",
+    v: {},
+  });
+  post(
+    `${name(me.ch)} challenged ${name(roster.find((u) => u.id == leadUid).ch)} for tomorrow's cap.`,
+  );
+  render();
+}
+async function chAct(a) {
+  await updateDoc(cref(), { st: a });
+  post(
+    a == "on"
+      ? "Challenge accepted. Blood will be spilled."
+      : "The leader refused a challenge. Coward.",
+  );
+  render();
+}
+async function chWin(w) {
+  await updateDoc(cref(), { ["v." + uid]: w });
+  const C = (await getDoc(cref())).data(),
+    o = C.from == uid ? C.to : C.from;
+  if (C.v[o]) {
+    if (C.v[o] == w) {
+      await updateDoc(cref(), { st: "done", win: w });
+      post(
+        `${name(roster.find((u) => u.id == w).ch)} won the challenge and takes tomorrow's cap.`,
+      );
+    } else {
+      await updateDoc(cref(), { v: {} });
+      gg("You two disagree. Both pick again.");
+    }
+  }
   render();
 }
 function giftUI() {
@@ -747,6 +838,9 @@ $("#app").onclick = async (e) => {
   if (b.id == "pl") play();
   if (b.id == "hk") hack();
   if (b.id == "gf") giftUI();
+  if (b.id == "cc") challenge();
+  if (b.dataset.ca) chAct(b.dataset.ca);
+  if (b.dataset.w) chWin(b.dataset.w);
   if (b.dataset.j) {
     const j = jarList.find((x) => x.id == b.dataset.j);
     modal(
