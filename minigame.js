@@ -92,6 +92,6 @@ const quick = { name: 'Quick Draw', rules: 'Wait until the pad turns red and say
 
 // One game per weekday (Sun..Sat). Reorder or swap entries to change the week.
 const gp = new URLSearchParams(location.search).get('game'); // ?game=0..6 to test a game
-// const G = [catcher, memory, target, knife, toss, seq, quick][gp !== null ? +gp : new Date().getDay()];
-const G = catcher;
+ const G = [catcher, memory, target, knife, toss, seq, quick][gp !== null ? +gp : new Date().getDay()];
+
 export default { name: G.name, rules: G.rules, mount: G.mount };

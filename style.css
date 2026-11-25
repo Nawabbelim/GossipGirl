@@ -125,3 +125,4 @@ main{width:100%}
 @keyframes fall{from{transform:translateY(0) rotate(var(--r))}to{transform:translateY(calc(var(--h) * 1px + 160px)) rotate(var(--r))}}
 @keyframes sway{to{transform:translateX(16px)}}
 .chit span{width:100%;margin:0;text-align:left;overflow-wrap:anywhere;hyphens:none;backface-visibility:hidden}
+.hist{font-size:.85rem;opacity:.75}
